@@ -132,6 +132,19 @@ class CommandParser:
                 description="显示帮助信息",
                 examples=["帮助", "你能做什么"],
             ),
+            Command(
+                name="ai_query",
+                patterns=[
+                    r"(问|问一下|请问|告诉我)\s*(.+)",
+                    r"什么是\s*(.+)",
+                    r"怎么(样|办|做)\s*(.+)",
+                    r"为什么\s*(.+)",
+                    r"如何\s*(.+)",
+                    r"介绍一下\s*(.+)",
+                ],
+                description="AI 智能问答",
+                examples=["问一下黑洞是什么", "怎么煎牛排", "介绍一下 Python"],
+            ),
         ]
         self.commands.extend(defaults)
 

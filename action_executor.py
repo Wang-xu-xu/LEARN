@@ -7,6 +7,7 @@ import os
 import sys
 import subprocess
 import webbrowser
+import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -64,17 +65,21 @@ class ActionExecutor:
         exe = self.APP_MAP.get(target)
         if exe:
             try:
-                if exe.startswith("ms-"):
-                    subprocess.Popen(["start", exe], shell=True)
+                if isinstance(exe, str) and exe.startswith("ms-"):
+                    subprocess.Popen(f"start {exe}", shell=True)
                 else:
-                    subprocess.Popen([exe], shell=True)
+                    subprocess.Popen(exe, shell=False)
                 return f"已打开 {target}"
             except Exception as e:
-                return f"打开 {target} 失败: {e}"
+                try:
+                    os.startfile(target)
+                    return f"已尝试打开 {target}"
+                except Exception:
+                    return f"打开 {target} 失败: {e}"
 
         # 尝试用 start 命令
         try:
-            subprocess.Popen(["start", target], shell=True)
+            subprocess.Popen(f"start {target}", shell=True)
             return f"已尝试打开 {target}"
         except Exception:
             return f"未找到应用: {target}"
@@ -87,8 +92,7 @@ class ActionExecutor:
 
         exe = self.APP_MAP.get(target, target)
         try:
-            subprocess.run(["taskkill", "/f", "/im", exe],
-                           capture_output=True, shell=True)
+            subprocess.run(["taskkill", "/f", "/im", exe], capture_output=True, shell=False)
             return f"已关闭 {target}"
         except Exception:
             return f"关闭 {target} 失败"
@@ -224,6 +228,28 @@ class ActionExecutor:
             ctypes.windll.user32.keybd_event(0x10, 0, 2, 0)
             ctypes.windll.user32.keybd_event(0x5B, 0, 2, 0)
             return "已触发截图快捷键"
+
+    def _handle_ai_query(self, params: dict, text: str) -> str:
+        """AI 智能问答"""
+        from ai_query import query_deepseek, API_KEY
+
+        # 尝试从完整语音文本提取问题（比 params 的 target 更完整）
+        question = params.get("target", text).strip()
+        if not question or len(question) < 2:
+            return "请告诉我你想问什么"
+
+        if not API_KEY:
+            return (
+                "DeepSeek 未配置。请在终端执行以下命令设置密钥：\n"
+                '$env:DEEPSEEK_API_KEY="你的API密钥"'
+            )
+
+        print(f"[AI] 正在查询: {question}")
+        answer = query_deepseek(question)
+
+        if answer:
+            return answer
+        return "AI 查询失败，请重试"
 
     def _handle_help(self, params: dict, text: str) -> str:
         """帮助"""

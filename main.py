@@ -3,11 +3,13 @@
 唤醒词 → 进入对话模式 → 连续发指令 → 说"退出"回到监听
 """
 
-import sys, os, json, time, queue, threading, subprocess, webbrowser, re
+import sys, os, json, time, queue, threading, subprocess, webbrowser, re, math
 import urllib.request, urllib.error
 from datetime import datetime
 from pathlib import Path
 from web_search import smart_search
+from command_parser import CommandParser
+from action_executor import ActionExecutor
 
 # ============================================
 # 配置
@@ -194,7 +196,11 @@ def run_ps(cmd):
     try:
         r = subprocess.run(["powershell", "-Command", cmd], capture_output=True, text=True, timeout=10)
         return r.stdout.strip() or r.stderr.strip() or "完成"
-    except: return "执行失败"
+    except:
+        return "执行失败"
+
+parser = CommandParser()
+executor = ActionExecutor()
 
 def send_keys(*keys):
     """发送按键"""
@@ -213,46 +219,47 @@ def send_keys(*keys):
 def execute(text):
     """解析并执行命令，返回回复文本"""
     t = text.strip()
-    if not t: return "请说指令"
+    if not t:
+        return "请说指令"
 
-    # === 退出对话 ===
-    if any(t == p for p in EXIT_PHRASES):
+    if any(t == p or t.startswith(p + " ") for p in EXIT_PHRASES):
         return "__EXIT__"
 
-    # === AI 问答 ===
-    for pat in [r"(问下?|请问|告诉我)\s*(.+)", r"什么是\s*(.+)", r"为什么\s*(.+)",
-                r"如何\s*(.+)", r"怎么\s*(.+)", r"介绍\s*(.+)"]:
-        m = re.search(pat, t)
-        if m:
-            g = m.groups()[-1]
-            print(f"[AI] 查询: {g}")
-            return deepseek(g)
+    parsed = parser.parse(t)
+    if parsed:
+        cmd, params = parsed
+        if cmd.name == "help":
+            return parser.get_help()
+        result = executor.execute(cmd.name, params, t)
+        if result:
+            return result
 
-    # === 搜索 ===
+    # 兜底命令处理
     m = re.search(r"搜索\s*(.+)", t)
     if m:
-        webbrowser.open(f"https://www.baidu.com/s?wd={m.group(1)}")
-        return f"已搜索 {m.group(1)}"
+        query = m.group(1).strip()
+        webbrowser.open(f"https://www.baidu.com/s?wd={query}", new=2)
+        return f"已搜索 {query}"
 
-    # === 打开应用 ===
-    m = re.search(r"(打开|启动|运行)\s*(.+)", t)
+    m = re.search(r"(.+)天气", t)
     if m:
-        target = m.group(2).strip()
-        exe = APP_MAP.get(target, target)
-        try:
-            subprocess.Popen([exe], shell=True)
-            return f"已打开 {target}"
-        except:
-            try: subprocess.Popen(["start", target], shell=True); return f"已尝试打开 {target}"
-            except: return f"未找到 {target}"
+        city = m.group(1).strip() or "北京"
+        webbrowser.open(f"https://www.baidu.com/s?wd={city}+天气", new=2)
+        return f"已查询 {city} 天气"
 
-    # === 关闭应用 ===
-    m = re.search(r"(关闭|退出|结束)\s*(.+)", t)
-    if m:
-        target = m.group(2).strip()
-        exe = APP_MAP.get(target, target)
-        subprocess.run(["taskkill", "/f", "/im", exe], capture_output=True, shell=True)
-        return f"已关闭 {target}"
+    if re.search(r"^(问下?|请问|告诉我)\s*(.+)", t) or re.search(r"^(什么是|为什么|如何|怎么|介绍)\s*(.+)", t):
+        question = re.sub(r"^(问下?|请问|告诉我|什么是|为什么|如何|怎么|介绍)\s*", "", t)
+        return deepseek(question)
+
+    print(f"[搜索] 联网查询: {t}")
+    result = smart_search(t)
+    answer = result.get("answer", "")
+    if not answer:
+        return f"抱歉，没查到「{t}」相关信息"
+    sources = result.get("sources", [])
+    if sources:
+        return f"{answer}。参考了{len(sources)}个网页。"
+    return answer
 
     # === 窗口操作 ===
     if "最小化" in t: send_keys("win", "m"); return "已最小化所有窗口"

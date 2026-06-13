@@ -102,38 +102,43 @@ class WakeWordDetector:
             self._keyboard_mode()
 
     def _keyword_listen_loop(self):
-        """关键词检测模式 — 持续语音识别，检测自定义唤醒词"""
-        import pyaudio
-        import numpy as np
-        import wave
-        import tempfile
-
+        """关键词检测模式 — 低延迟持续监听自定义唤醒词"""
         print(f"[唤醒] 持续监听关键词 '{self.wake_word}' ...")
 
         try:
             import speech_recognition as sr
             r = sr.Recognizer()
-            r.energy_threshold = 300
-            r.pause_threshold = 0.8
+            r.energy_threshold = 80        # 降低阈值，更灵敏
+            r.dynamic_energy_threshold = True  # 动态调整
+            r.pause_threshold = 0.4        # 缩短停顿检测，更快截断
+            r.operation_timeout = 0.3      # 内部操作超时
+            r.non_speaking_duration = 0.3  # 非语音判定间隔
 
             with sr.Microphone(sample_rate=16000) as source:
-                r.adjust_for_ambient_noise(source, duration=1)
-                print("[唤醒] 环境噪音校准完成，开始监听")
+                # 快速噪音校准
+                r.adjust_for_ambient_noise(source, duration=0.5)
+                print("[唤醒] 噪音校准完成 (阈值动态)，开始监听")
 
+                last_wake = 0
                 while self._running:
                     try:
-                        audio = r.listen(source, timeout=1, phrase_time_limit=3)
+                        # 缩短超时和最大录音时长，提高轮询频率
+                        audio = r.listen(source, timeout=0.5, phrase_time_limit=2)
+                        now_ts = time.time()
+                        if now_ts - last_wake < 2.0:
+                            continue  # 冷却期，跳过识别避免重复
+
                         try:
                             text = r.recognize_google(audio, language="zh-CN").lower()
                             if self.wake_word.lower() in text:
                                 print(f"[唤醒] 检测到关键词 '{self.wake_word}'!")
+                                last_wake = time.time()
                                 if self._callback:
                                     threading.Thread(target=self._callback, daemon=True).start()
-                                time.sleep(1.5)
                         except sr.UnknownValueError:
                             pass
                         except sr.RequestError:
-                            pass
+                            time.sleep(0.2)  # 网络错误时稍等再重试
                     except sr.WaitTimeoutError:
                         continue
         except ImportError:
