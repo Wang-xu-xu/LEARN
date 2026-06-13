@@ -27,12 +27,25 @@ class SpeechSynthesizer:
                 import pyttsx3
                 self._engine = pyttsx3.init()
                 voices = self._engine.getProperty('voices')
-                # 中文语音
+                # 中文语音 — 优先女声
+                best_voice = None
                 for voice in voices:
-                    if "chinese" in voice.name.lower() or "zh" in voice.id.lower():
-                        self._engine.setProperty('voice', voice.id)
+                    name_lower = voice.name.lower()
+                    id_lower = voice.id.lower()
+                    if "huihui" in name_lower or "hanhan" in name_lower or "yaoyao" in name_lower:
+                        best_voice = voice.id
                         break
-                self._engine.setProperty('rate', 160)
+                    if "chinese" in name_lower or "zh" in id_lower:
+                        if not best_voice:
+                            best_voice = voice.id
+
+                if best_voice:
+                    self._engine.setProperty('voice', best_voice)
+                    print(f"[TTS] 语音: {best_voice}")
+                else:
+                    print("[TTS] 未找到中文语音，使用默认英语语音")
+
+                self._engine.setProperty('rate', 170)   # 语速适中
                 self._engine.setProperty('volume', 1.0)
                 self.backend = "pyttsx3"
                 print("[TTS] 使用 Windows SAPI5 语音合成")
