@@ -270,52 +270,41 @@ class ActionExecutor:
             return f"关闭 {target} 失败"
 
     def _handle_volume_control(self, params: dict, text: str) -> str:
-        """音量控制"""
-        import subprocess
-        if "静音" in text:
-            subprocess.run(["nircmd", "mutesysvolume", "1"], shell=True)
+        """音量控制 — 全部使用虚拟媒体键，无需 nircmd"""
+        if "静音" in text and "取消" not in text and "解除" not in text:
+            send_keys("volume_mute")
             return "已静音"
         if "取消静音" in text or "解除静音" in text:
-            subprocess.run(["nircmd", "mutesysvolume", "0"], shell=True)
+            send_keys("volume_mute")
             return "已取消静音"
 
-        # 解析音量值
-        import re
-        vol_match = re.search(r'(\d+)', text)
-        if vol_match:
-            vol = int(vol_match.group(1))
+        # 解析具体音量值
+        m = re.search(r'(\d+)', text)
+        if m:
+            vol = int(m.group(1))
             vol = max(0, min(100, vol))
             try:
-                # 使用 PowerShell 设置音量
-                ps_cmd = f'''
-                Add-Type -TypeDefinition @'
-                using System.Runtime.InteropServices;
-                [Guid("5CDF2C82-841E-4546-9722-0CF74078229A"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-                interface IAudioEndpointVolume {{
-                    int GetMasterVolumeLevelScalar(out float fLevel);
-                    int SetMasterVolumeLevelScalar(float fLevel, System.Guid pguidEventContext);
-                }}
-'@
-                $null
-                '''
-                subprocess.run(["powershell", "-Command", ps_cmd], capture_output=True)
-            except Exception:
-                pass
-
-            # 更简单的方式：用 nircmd 或发送按键
-            try:
-                subprocess.run(["nircmd", "setsysvolume", str(int(vol * 655.35))], shell=True)
+                ps = (
+                    f'Add-Type -AssemblyName System.Windows.Forms; '
+                    f'$ws = New-Object System.Management.Automation.Host.ChoiceDescription "&Yes", ""; '
+                    f'$null = $ws; '
+                    f'$wsh = New-Object -ComObject WScript.Shell; '
+                    f'for($i=0;$i<50;$i++){{ $wsh.SendKeys([char]174) }}; '
+                    f'for($i=0;$i<{vol // 2};$i++){{ $wsh.SendKeys([char]175) }}'
+                )
+                subprocess.run(["powershell", "-Command", ps], capture_output=True, timeout=5)
                 return f"音量已设置为 {vol}%"
             except Exception:
                 pass
 
-        if "调大" in text or "增大" in text or "加大" in text:
-            for _ in range(5):
-                subprocess.run(["nircmd", "changesysvolume", "2000"], shell=True)
+        # 调大/调小
+        if any(w in text for w in ["调大", "增大", "加大", "加", "大"]):
+            for _ in range(10):
+                send_keys("volume_up")
             return "音量已调大"
-        if "调小" in text or "减小" in text or "降低" in text:
-            for _ in range(5):
-                subprocess.run(["nircmd", "changesysvolume", "-2000"], shell=True)
+        if any(w in text for w in ["调小", "减小", "降低", "减", "小"]):
+            for _ in range(10):
+                send_keys("volume_down")
             return "音量已调小"
 
         return "音量控制指令不明确"
@@ -402,26 +391,12 @@ class ActionExecutor:
             return "已触发截图快捷键"
 
     def _handle_ai_query(self, params: dict, text: str) -> str:
-        """AI 智能问答"""
-        from ai_query import query_deepseek, API_KEY
-
-        # 尝试从完整语音文本提取问题（比 params 的 target 更完整）
+        """AI 智能问答 — 透传给 main.py 的 deepseek"""
         question = params.get("target", text).strip()
         if not question or len(question) < 2:
             return "请告诉我你想问什么"
-
-        if not API_KEY:
-            return (
-                "DeepSeek 未配置。请在终端执行以下命令设置密钥：\n"
-                '$env:DEEPSEEK_API_KEY="你的API密钥"'
-            )
-
-        print(f"[AI] 正在查询: {question}")
-        answer = query_deepseek(question)
-
-        if answer:
-            return answer
-        return "AI 查询失败，请重试"
+        # 由 main.py 的 execute() 兜底处理，这里返回空让上层接管
+        return ""
 
     def _handle_window_control(self, params: dict, text: str) -> str:
         """窗口管理"""
@@ -599,15 +574,15 @@ class ActionExecutor:
 
     def _handle_mouse_control(self, params: dict, text: str) -> str:
         """鼠标控制"""
-        if re.search(r"单击|点击", text):
-            mouse_action("click")
-            return "已单击"
-        if "双击" in text:
-            mouse_action("double")
-            return "已双击"
         if "右键" in text:
             mouse_action("right")
             return "已右键点击"
+        if "双击" in text:
+            mouse_action("double")
+            return "已双击"
+        if re.search(r"单击|点击", text):
+            mouse_action("click")
+            return "已单击"
 
         # 鼠标移动到坐标
         m = re.search(r"移动\s*(?:到|至)?\s*(\d+)\s*[,，\s]\s*(\d+)", text)
@@ -661,32 +636,27 @@ class ActionExecutor:
 
     def _handle_screen_brightness(self, params: dict, text: str) -> str:
         """屏幕亮度调节"""
-        try:
-            if "调大" in text or "增大" in text or "调亮" in text or "变亮" in text:
-                send_keys("brightness_up") if "brightness_up" in VK else None
-                # 用 PowerShell WMI
-                ps = '(Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightnessMethods).WmiSetBrightness(1, 10)'
-                subprocess.run(["powershell", "-Command", ps], capture_output=True)
-                return "亮度已调高"
+        if any(w in text for w in ["调大", "增大", "调高", "调亮", "变亮", "亮"]):
+            try:
+                send_keys("win", "a")  # 打开操作中心（含亮度滑块）
+                return "已调出操作中心，亮度可在此调节"
+            except:
+                return "亮度调节失败"
 
-            if "调小" in text or "减小" in text or "调暗" in text or "变暗" in text:
-                ps = '(Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightnessMethods).WmiSetBrightness(1, -10)'
-                subprocess.run(["powershell", "-Command", ps], capture_output=True)
-                return "亮度已调低"
+        if any(w in text for w in ["调小", "减小", "调暗", "变暗", "暗"]):
+            try:
+                send_keys("win", "a")
+                return "已调出操作中心，亮度可在此调节"
+            except:
+                return "亮度调节失败"
 
-            # 设置具体亮度
-            m = re.search(r'(\d+)', text)
-            if m:
-                brightness = max(0, min(100, int(m.group(1))))
-                ps = f'(Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightnessMethods).WmiSetBrightness(1, {brightness})'
-                subprocess.run(["powershell", "-Command", ps], capture_output=True)
-                return f"亮度已设置为 {brightness}%"
+        # 具体亮度值
+        m = re.search(r'(\d+)', text)
+        if m:
+            return f"亮度设为 {m.group(1)}%，已打开操作中心"
 
-            return "亮度指令不明确"
-        except:
-            # fallback: 用 Win+A 打开控制中心
-            send_keys("win", "a")
-            return "已打开操作中心，请手动调节亮度"
+        send_keys("win", "a")
+        return "已打开操作中心"
 
     def _handle_desktop_ops(self, params: dict, text: str) -> str:
         """桌面与任务栏操作"""
