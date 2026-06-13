@@ -18,7 +18,7 @@ from tts_engine import SpeechSynthesizer
 class VoiceButler:
     """语音管家主控"""
 
-    def __init__(self, wake_word: str = "hey_jarvis"):
+    def __init__(self, wake_word: str = "T3"):
         self.wake_word = wake_word
         self.detector = WakeWordDetector(wake_word=wake_word)
         self.asr = SpeechRecognizer()
@@ -90,7 +90,7 @@ class VoiceButler:
 
 
 def main():
-    wake_word = sys.argv[1] if len(sys.argv) > 1 else "hey_jarvis"
+    wake_word = sys.argv[1] if len(sys.argv) > 1 else "T3"
     butler = VoiceButler(wake_word=wake_word)
     butler.run()
 

@@ -11,27 +11,33 @@ from collections import deque
 
 
 class WakeWordDetector:
-    """语音唤醒词检测器"""
+    """语音唤醒词检测器 — 支持自定义唤醒词（关键词匹配模式）"""
 
-    DEFAULT_MODEL = "hey_jarvis"  # openWakeWord 内置模型之一
-    AVAILABLE_MODELS = [
+    BUILTIN_MODELS = [
         "alexa", "hey_mycroft", "hey_jarvis",
         "weather", "timer", "xbox", "hey_marvis",
     ]
 
-    def __init__(self, wake_word: str = "hey_jarvis", sensitivity: float = 0.5):
+    def __init__(self, wake_word: str = "T3", sensitivity: float = 0.5):
         self.wake_word = wake_word
         self.sensitivity = sensitivity
         self._running = False
         self._callback = None
         self._model = None
+        self._use_keyword_mode = False  # 自定义唤醒词用关键词模式
         self._thread = None
 
     def _load_model(self):
-        """动态加载 openWakeWord 模型"""
+        """加载唤醒词检测模型"""
+        # 判断是否使用内置模型还是自定义关键词模式
+        if self.wake_word not in self.BUILTIN_MODELS:
+            print(f"[唤醒] '{self.wake_word}' 为自定义唤醒词，使用持续监听+关键词检测模式")
+            self._use_keyword_mode = True
+            return self._init_keyword_mode()
+
+        # 内置模型：使用 openWakeWord
         try:
             from openwakeword.model import Model
-            # 下载内置模型（首次运行自动下载）
             import openwakeword.utils
             model_dir = os.path.join(os.path.dirname(__file__), "wake_models")
             os.makedirs(model_dir, exist_ok=True)
@@ -39,10 +45,8 @@ class WakeWordDetector:
 
             model_path = os.path.join(model_dir, f"{self.wake_word}.onnx")
             if not os.path.exists(model_path):
-                # 尝试用 alexa 作为 fallback
                 model_path = os.path.join(model_dir, "alexa.onnx")
                 print(f"[唤醒] 未找到 '{self.wake_word}' 模型，使用 'alexa' 替代")
-                self.wake_word = "alexa"
 
             self._model = Model(
                 wakeword_models=[model_path],
@@ -97,10 +101,59 @@ class WakeWordDetector:
             print("[唤醒] pyaudio 未安装。进入键盘模拟模式...")
             self._keyboard_mode()
 
+    def _keyword_listen_loop(self):
+        """关键词检测模式 — 持续语音识别，检测自定义唤醒词"""
+        import pyaudio
+        import numpy as np
+        import wave
+        import tempfile
+
+        print(f"[唤醒] 持续监听关键词 '{self.wake_word}' ...")
+
+        try:
+            import speech_recognition as sr
+            r = sr.Recognizer()
+            r.energy_threshold = 300
+            r.pause_threshold = 0.8
+
+            with sr.Microphone(sample_rate=16000) as source:
+                r.adjust_for_ambient_noise(source, duration=1)
+                print("[唤醒] 环境噪音校准完成，开始监听")
+
+                while self._running:
+                    try:
+                        audio = r.listen(source, timeout=1, phrase_time_limit=3)
+                        try:
+                            text = r.recognize_google(audio, language="zh-CN").lower()
+                            if self.wake_word.lower() in text:
+                                print(f"[唤醒] 检测到关键词 '{self.wake_word}'!")
+                                if self._callback:
+                                    threading.Thread(target=self._callback, daemon=True).start()
+                                time.sleep(1.5)
+                        except sr.UnknownValueError:
+                            pass
+                        except sr.RequestError:
+                            pass
+                    except sr.WaitTimeoutError:
+                        continue
+        except ImportError:
+            print("[唤醒] SpeechRecognition 不可用，降级到键盘模式")
+            self._keyboard_mode()
+
+    def _init_keyword_mode(self):
+        """初始化关键词检测模式"""
+        try:
+            import speech_recognition
+            print("[唤醒] 关键词检测模式就绪")
+            return True
+        except ImportError:
+            print("[唤醒] 需安装: pip install SpeechRecognition pyaudio")
+            return False
+
     def _keyboard_mode(self):
-        """键盘模拟模式 — 按空格键模拟唤醒"""
+        """键盘模拟模式 — 按 Enter 键模拟唤醒"""
         print("\n" + "=" * 50)
-        print("  语音管家 — 键盘模拟模式")
+        print(f"  语音管家 — 键盘模拟模式 (唤醒词: {self.wake_word})")
         print("  按 Enter 键模拟唤醒")
         print("=" * 50)
         while self._running:
@@ -117,7 +170,10 @@ class WakeWordDetector:
         self._running = True
 
         if self._load_model():
-            self._thread = threading.Thread(target=self._listen_loop, daemon=True)
+            if self._use_keyword_mode:
+                self._thread = threading.Thread(target=self._keyword_listen_loop, daemon=True)
+            else:
+                self._thread = threading.Thread(target=self._listen_loop, daemon=True)
             self._thread.start()
         else:
             self._thread = threading.Thread(target=self._keyboard_mode, daemon=True)
