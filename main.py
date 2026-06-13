@@ -83,7 +83,9 @@ class ASR:
         listening = False
         cmd_rec = None
         cmd_text = ""
-        silence_deadline = 0
+        last_activity = 0           # 最后一次有意义的语音变化时刻
+        IDLE_TIMEOUT = 15           # 超时秒数（进入命令模式后完全无语音活动则退出）
+        SILENCE_GAP = 1.0           # 停顿检测秒数（用户说完后判定结束）
 
         while True:
             data = stream.read(4000, exception_on_overflow=False)
@@ -100,9 +102,9 @@ class ASR:
                     if now - last_wake > 2.5:
                         last_wake = now
                         listening = True
+                        last_activity = now
                         cmd_rec = vosk.KaldiRecognizer(self.model, 16000)
                         cmd_text = ""
-                        silence_deadline = 0
                         on_wake()
             else:
                 # 命令识别
@@ -111,33 +113,46 @@ class ASR:
                 now = time.time()
                 if pt and pt != cmd_text:
                     cmd_text = pt
+                    last_activity = now
                     print(f"\r[聆听] {cmd_text}", end="", flush=True)
 
                 if cmd_rec.AcceptWaveform(data):
                     t = json.loads(cmd_rec.Result()).get("text", "").strip()
-                    if t: cmd_text = t
+                    if t:
+                        cmd_text = t
+                        last_activity = now
 
-                # 检测说完：有内容 + 无变化1.2秒
-                if cmd_text and pt == cmd_text:
-                    if silence_deadline == 0: silence_deadline = now + 1.2
-                    elif now >= silence_deadline:
-                        final = json.loads(cmd_rec.FinalResult()).get("text", "").strip()
-                        result = final or cmd_text
-                        if result:
-                            print(f"\n[识别] {result}")
-                            on_command(result)
-                        listening = False
-                        wake_rec = vosk.KaldiRecognizer(self.model, 16000)
-                        wake_rec.SetWords(True)
-                        cmd_rec = None; cmd_text = ""; silence_deadline = 0
-                else:
-                    silence_deadline = 0
-                if now - (last_wake + 0.5) > 6:  # 6秒无输入退出命令模式
-                    print("\n[识别] 超时")
+                # 检测说完：有内容 + 停顿超过 SILENCE_GAP 秒
+                if cmd_text and now - last_activity >= SILENCE_GAP:
+                    # 再次确认不是瞬时波动
+                    time.sleep(0.15)
+                    final = json.loads(cmd_rec.FinalResult()).get("text", "").strip()
+                    result = final or cmd_text
+                    if result:
+                        print(f"\n[识别] {result}")
+                        on_command(result)
+                    else:
+                        # FinalResult 为空但之前有 partial，用最后的 partial
+                        if cmd_text:
+                            print(f"\n[识别] {cmd_text}")
+                            on_command(cmd_text)
                     listening = False
                     wake_rec = vosk.KaldiRecognizer(self.model, 16000)
                     wake_rec.SetWords(True)
                     cmd_rec = None; cmd_text = ""; silence_deadline = 0
+                    continue
+
+                # 超时检测：进入命令模式后完全无语音活动超时退出
+                idle = now - last_activity
+                if idle >= IDLE_TIMEOUT and not cmd_text:
+                    print("\n[识别] 超时（未检测到语音）")
+                    listening = False
+                    wake_rec = vosk.KaldiRecognizer(self.model, 16000)
+                    wake_rec.SetWords(True)
+                    cmd_rec = None; cmd_text = ""
+                elif idle >= 10 and not cmd_text:
+                    # 10秒时给个提示
+                    pass  # 静默等待，不给干扰提示
 
 # ============================================
 # DeepSeek 问答
