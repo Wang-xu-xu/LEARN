@@ -7,6 +7,7 @@ import sys, os, json, time, queue, threading, subprocess, webbrowser, re
 import urllib.request, urllib.error
 from datetime import datetime
 from pathlib import Path
+from web_search import smart_search
 
 # ============================================
 # 配置
@@ -339,10 +340,21 @@ def execute(text):
 
     # === 帮助 ===
     if any(w in t for w in ["帮助", "能做什么", "功能", "help"]):
-        return ("我会：打开/关闭应用、窗口管理、音量调节、截图、时间天气、文件创建删除、"
-                "搜索网页、AI问答。说「退出」回到待命状态。")
+        return ("我会：打开关闭应用、窗口管理、音量调节、截图、时间天气、文件操作、"
+                "AI问答和联网搜索。说「退出」回到待命。")
 
-    return f"抱歉，我不理解「{t}」，试试说帮助"
+    # === 智能联网搜索（兜底） ===
+    print(f"[搜索] 联网查询: {t}")
+    result = smart_search(t)
+    answer = result.get("answer", "")
+    if not answer:
+        return f"抱歉，没查到「{t}」相关信息"
+    sources = result.get("sources", [])
+    if sources:
+        summary = f"{answer}。参考了{len(sources)}个网页。"
+    else:
+        summary = answer
+    return summary
 
 # ============================================
 # 主程序 — 多轮对话模式
