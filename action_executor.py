@@ -5,11 +5,183 @@
 
 import os
 import sys
+import re
+import time
+import ctypes
 import subprocess
 import webbrowser
 import threading
 from datetime import datetime
 from pathlib import Path
+from ctypes import wintypes
+
+
+# ============================================
+# Windows API 底层工具
+# ============================================
+
+# 虚拟键码扩展
+VK = {
+    # 修饰键
+    "win": 0x5B, "shift": 0x10, "ctrl": 0x11, "alt": 0x12,
+    # 功能键
+    "tab": 0x09, "enter": 0x0D, "esc": 0x1B, "space": 0x20,
+    "backspace": 0x08, "delete": 0x2E, "home": 0x24, "end": 0x23,
+    "pageup": 0x21, "pagedown": 0x22, "insert": 0x2D,
+    "up": 0x26, "down": 0x28, "left": 0x25, "right": 0x27,
+    "caps": 0x14, "numlock": 0x90, "scrolllock": 0x91,
+    "printscreen": 0x2C, "pause": 0x13,
+    # 字母键
+    "a": 0x41, "b": 0x42, "c": 0x43, "d": 0x44, "e": 0x45,
+    "f": 0x46, "g": 0x47, "h": 0x48, "i": 0x49, "j": 0x4A,
+    "k": 0x4B, "l": 0x4C, "m": 0x4D, "n": 0x4E, "o": 0x4F,
+    "p": 0x50, "q": 0x51, "r": 0x52, "s": 0x53, "t": 0x54,
+    "u": 0x55, "v": 0x56, "w": 0x57, "x": 0x58, "y": 0x59, "z": 0x5A,
+    # 数字键
+    "0": 0x30, "1": 0x31, "2": 0x32, "3": 0x33, "4": 0x34,
+    "5": 0x35, "6": 0x36, "7": 0x37, "8": 0x38, "9": 0x39,
+    # F键
+    "f1": 0x70, "f2": 0x71, "f3": 0x72, "f4": 0x73, "f5": 0x74,
+    "f6": 0x75, "f7": 0x76, "f8": 0x77, "f9": 0x78, "f10": 0x79,
+    "f11": 0x7A, "f12": 0x7B,
+    # 媒体键
+    "media_play_pause": 0xB3, "media_stop": 0xB2,
+    "media_next": 0xB0, "media_prev": 0xB1,
+    "volume_mute": 0xAD, "volume_down": 0xAE, "volume_up": 0xAF,
+    "browser_home": 0xAC, "browser_search": 0xAA,
+    "browser_back": 0xA6, "browser_forward": 0xA7,
+    "browser_refresh": 0xA8,
+}
+
+
+def send_keys(*keys, hold=0.05):
+    """发送按键序列，支持组合键（如 send_keys('ctrl', 'c')）"""
+    user32 = ctypes.windll.user32
+    codes = []
+    for k in keys:
+        kl = k.lower()
+        code = VK.get(kl, ord(k.upper()) if len(k) == 1 else 0)
+        if code:
+            codes.append(code)
+
+    if not codes:
+        return False
+
+    # 按下
+    for code in codes:
+        user32.keybd_event(code, 0, 0, 0)
+        time.sleep(hold * 0.5)
+    time.sleep(hold)
+    # 释放（逆序）
+    for code in reversed(codes):
+        user32.keybd_event(code, 0, 2, 0)
+        time.sleep(hold * 0.3)
+    return True
+
+
+def type_text(text):
+    """通过模拟键盘输入文本（使用剪贴板+粘贴，支持中文）"""
+    import win32clipboard
+
+    # 存储旧剪贴板
+    try:
+        win32clipboard.OpenClipboard()
+        old = win32clipboard.GetClipboardData(win32clipboard.CF_UNICODETEXT)
+        win32clipboard.CloseClipboard()
+    except:
+        old = ""
+
+    # 写入新内容
+    win32clipboard.OpenClipboard()
+    win32clipboard.EmptyClipboard()
+    win32clipboard.SetClipboardText(text, win32clipboard.CF_UNICODETEXT)
+    win32clipboard.CloseClipboard()
+    time.sleep(0.05)
+
+    # Ctrl+V
+    send_keys("ctrl", "v")
+
+    # 恢复旧剪贴板
+    if old:
+        time.sleep(0.1)
+        win32clipboard.OpenClipboard()
+        win32clipboard.EmptyClipboard()
+        win32clipboard.SetClipboardText(old, win32clipboard.CF_UNICODETEXT)
+        win32clipboard.CloseClipboard()
+
+
+def mouse_action(action="click", x=None, y=None):
+    """鼠标操作：click / double / right / move"""
+    user32 = ctypes.windll.user32
+    MOUSEEVENTF_MOVE = 0x0001
+    MOUSEEVENTF_LEFTDOWN = 0x0002
+    MOUSEEVENTF_LEFTUP = 0x0004
+    MOUSEEVENTF_RIGHTDOWN = 0x0008
+    MOUSEEVENTF_RIGHTUP = 0x0010
+    MOUSEEVENTF_ABSOLUTE = 0x8000
+
+    if x is not None and y is not None:
+        # 绝对坐标（屏幕分辨率归一化到 0~65535）
+        screen_w = user32.GetSystemMetrics(0)
+        screen_h = user32.GetSystemMetrics(1)
+        abs_x = int(x * 65535 / screen_w)
+        abs_y = int(y * 65535 / screen_h)
+        user32.mouse_event(MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE, abs_x, abs_y, 0, 0)
+        time.sleep(0.02)
+
+    if action == "click":
+        user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+        time.sleep(0.02)
+        user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+    elif action == "double":
+        user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+        user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+        time.sleep(0.05)
+        user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+        user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+    elif action == "right":
+        user32.mouse_event(MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, 0)
+        time.sleep(0.02)
+        user32.mouse_event(MOUSEEVENTF_RIGHTUP, 0, 0, 0, 0)
+    elif action == "move":
+        pass  # 已在上面移动
+    return True
+
+
+def get_cursor_pos():
+    """获取当前鼠标位置"""
+    point = wintypes.POINT()
+    ctypes.windll.user32.GetCursorPos(ctypes.byref(point))
+    return point.x, point.y
+
+
+def get_screen_size():
+    """获取屏幕分辨率"""
+    user32 = ctypes.windll.user32
+    return user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
+
+
+def move_relative(dx, dy):
+    """鼠标相对移动"""
+    ctypes.windll.user32.mouse_event(0x0001, dx, dy, 0, 0)
+
+
+def set_window_topmost(window_title=None):
+    """将指定窗口置顶"""
+    if window_title:
+        ps_cmd = f'''
+        Add-Type @"
+        using System; using System.Runtime.InteropServices;
+        public class WinAPI {{
+            [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+            [DllImport("user32.dll")] public static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
+            public static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
+            public static readonly IntPtr HWND_NOTOPMOST = new IntPtr(-2);
+        }}
+"@
+        $hwnd = [WinAPI]::FindWindow($null, "*{window_title}*")
+        if ($hwnd) {{ [WinAPI]::SetWindowPos($hwnd, [WinAPI]::HWND_TOPMOST, 0,0,0,0, 3) }}
+        '''
 
 
 class ActionExecutor:
@@ -250,6 +422,319 @@ class ActionExecutor:
         if answer:
             return answer
         return "AI 查询失败，请重试"
+
+    def _handle_window_control(self, params: dict, text: str) -> str:
+        """窗口管理"""
+        import ctypes
+        user32 = ctypes.windll.user32
+
+        # 显示桌面 (Win+D)
+        if any(w in text for w in ["显示桌面", "回到桌面"]):
+            send_keys("win", "d")
+            return "已显示桌面"
+
+        # 切换窗口 (Alt+Tab)
+        if any(w in text for w in ["切换窗口", "alt tab", "alt+tab"]):
+            send_keys("alt", "tab")
+            return "已切换窗口"
+
+        # 任务视图 (Win+Tab)
+        if "任务视图" in text:
+            send_keys("win", "tab")
+            return "已打开任务视图"
+
+        # 最小化所有窗口 (Win+M)
+        if any(w in text for w in ["最小化所有窗口", "所有窗口最小化", "最小化所有"]):
+            send_keys("win", "m")
+            return "已最小化所有窗口"
+
+        # 还原最小化 (Win+Shift+M)
+        if any(w in text for w in ["还原所有", "恢复所有"]):
+            send_keys("win", "shift", "m")
+            return "已还原所有窗口"
+
+        # 最小化当前窗口 (Alt+Space, N)
+        if "最小化" in text and "所有" not in text:
+            send_keys("alt", "space")
+            time.sleep(0.1)
+            send_keys("n")
+            return "已最小化当前窗口"
+
+        # 最大化当前窗口 (Win+Up)
+        if "最大化" in text:
+            send_keys("win", "up")
+            return "已最大化当前窗口"
+
+        # 窗口分屏左/右 (Win+Left / Win+Right)
+        if "分屏" in text or "平铺" in text:
+            send_keys("win", "z")
+            return "已打开分屏布局"
+
+        if "堆叠" in text:
+            send_keys("win", "up")
+            return "已调整窗口"
+
+        if "层叠" in text:
+            send_keys("win", "d")
+            return "已层叠窗口"
+
+        # 置顶 (通过 PowerShell 调用 WinAPI)
+        m = re.search(r"(?:置顶|取消置顶)\s*(.+)", text)
+        if m:
+            title = m.group(1).strip()
+            is_top = "取消" not in text
+            try:
+                ps = f'''
+                Add-Type @"
+                using System; using System.Runtime.InteropServices;
+                public class TopMost {{
+                    [DllImport("user32.dll")] public static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
+                    [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+                    public static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
+                    public static readonly IntPtr HWND_NOTOPMOST = new IntPtr(-2);
+                }}
+"@
+                $hwnd = [TopMost]::FindWindow($null, "*{title}*")
+                if ($hwnd) {{
+                    $pos = {("-1" if is_top else "-2")}
+                    [TopMost]::SetWindowPos($hwnd, $pos, 0, 0, 0, 0, 3)
+                    Write-Host "ok"
+                }} else {{ Write-Host "notfound" }}
+                '''
+                r = subprocess.run(["powershell", "-Command", ps],
+                                   capture_output=True, text=True, timeout=5)
+                if "ok" in (r.stdout or ""):
+                    return f"已将 {title} {'置顶' if is_top else '取消置顶'}"
+                return f"未找到窗口: {title}"
+            except:
+                return "置顶操作失败"
+        return "窗口管理指令不明确"
+
+    def _handle_keyboard_input(self, params: dict, text: str) -> str:
+        """键盘输入与快捷键"""
+        # 单键操作
+        shortcuts = {
+            "复制": ("ctrl", "c"), "拷贝": ("ctrl", "c"),
+            "粘贴": ("ctrl", "v"),
+            "剪切": ("ctrl", "x"),
+            "全选": ("ctrl", "a"),
+            "撤销": ("ctrl", "z"),
+            "重做": ("ctrl", "y"),
+            "保存": ("ctrl", "s"),
+            "刷新": ("f5"),
+            "查找": ("ctrl", "f"),
+            "替换": ("ctrl", "h"),
+            "加粗": ("ctrl", "b"),
+            "斜体": ("ctrl", "i"),
+            "下划线": ("ctrl", "u"),
+        }
+        for keyword, keys in shortcuts.items():
+            if text.strip() == keyword or text.strip() == keyword + "键":
+                send_keys(*keys)
+                return f"已执行 {keyword}"
+
+        # 回车
+        if "回车" in text:
+            send_keys("enter")
+            return "已按回车"
+
+        # 按 X 键
+        m = re.search(r"按\s*(?:下|下)?\s*(\S+)\s*键", text)
+        if m:
+            key = m.group(1).strip().lower()
+            if key == "回车":
+                send_keys("enter")
+            elif key == "空格":
+                send_keys("space")
+            elif key == "删除":
+                send_keys("delete")
+            elif key == "退格":
+                send_keys("backspace")
+            elif key == "上":
+                send_keys("up")
+            elif key == "下":
+                send_keys("down")
+            elif key == "左":
+                send_keys("left")
+            elif key == "右":
+                send_keys("right")
+            elif key == "esc" or key == "退出":
+                send_keys("esc")
+            else:
+                send_keys(key)
+            return f"已按 {key} 键"
+
+        # 快捷键
+        m = re.search(r"快捷键\s*(.+)", text)
+        if m:
+            combo = m.group(1).strip()
+            keys = [k.strip().lower() for k in combo.split("+")]
+            send_keys(*keys)
+            return f"已执行快捷键 {combo}"
+
+        # 输入 / 键入文本
+        m = re.search(r"(?:输入|键入|打出|写入)\s*(.+?)(?:\s+(?:在|到))?\s*$", text)
+        if m:
+            content = m.group(1).strip()
+            # 去掉末尾的语气词
+            content = re.sub(r'[。！？，、\s]*$', '', content)
+            if content:
+                try:
+                    type_text(content)
+                    return f"已输入: {content}"
+                except ImportError:
+                    # fallback: 用全选+替换方式
+                    try:
+                        import win32clipboard
+                        win32clipboard.OpenClipboard()
+                        win32clipboard.EmptyClipboard()
+                        win32clipboard.SetClipboardText(content)
+                        win32clipboard.CloseClipboard()
+                        send_keys("ctrl", "v")
+                        return f"已输入: {content}"
+                    except:
+                        return "输入失败，请安装 pywin32"
+            return "请指定要输入的内容"
+        return "键盘指令不明确"
+
+    def _handle_mouse_control(self, params: dict, text: str) -> str:
+        """鼠标控制"""
+        if re.search(r"单击|点击", text):
+            mouse_action("click")
+            return "已单击"
+        if "双击" in text:
+            mouse_action("double")
+            return "已双击"
+        if "右键" in text:
+            mouse_action("right")
+            return "已右键点击"
+
+        # 鼠标移动到坐标
+        m = re.search(r"移动\s*(?:到|至)?\s*(\d+)\s*[,，\s]\s*(\d+)", text)
+        if m:
+            x, y = int(m.group(1)), int(m.group(2))
+            mouse_action("move", x, y)
+            return f"鼠标已移动到 ({x}, {y})"
+
+        # 鼠标向上/下/左/右
+        m = re.search(r"鼠标\s*(向上|向下|向左|向右)(\d+)?", text)
+        if m:
+            direction = m.group(1)
+            dist = int(m.group(2)) if m.group(2) else 100
+            if "上" in direction:
+                move_relative(0, -dist)
+            elif "下" in direction:
+                move_relative(0, dist)
+            elif "左" in direction:
+                move_relative(-dist, 0)
+            elif "右" in direction:
+                move_relative(dist, 0)
+            return f"鼠标已{direction}移动 {dist} 像素"
+
+        # 获取位置
+        if "在哪里" in text or "位置" in text:
+            x, y = get_cursor_pos()
+            return f"鼠标当前位置: ({x}, {y})"
+        return "鼠标指令不明确"
+
+    def _handle_media_control(self, params: dict, text: str) -> str:
+        """媒体播放控制"""
+        if "暂停" in text or "停止" in text:
+            send_keys("media_play_pause")
+            return "已暂停"
+        if "播放" in text:
+            send_keys("media_play_pause")
+            return "已播放"
+        if "下一首" in text or "下一条" in text:
+            send_keys("media_next")
+            return "下一首"
+        if "上一首" in text or "上一条" in text:
+            send_keys("media_prev")
+            return "上一首"
+        if "快进" in text:
+            send_keys("media_next")
+            return "已快进"
+        if "快退" in text:
+            send_keys("media_prev")
+            return "已快退"
+        return "媒体控制指令不明确"
+
+    def _handle_screen_brightness(self, params: dict, text: str) -> str:
+        """屏幕亮度调节"""
+        try:
+            if "调大" in text or "增大" in text or "调亮" in text or "变亮" in text:
+                send_keys("brightness_up") if "brightness_up" in VK else None
+                # 用 PowerShell WMI
+                ps = '(Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightnessMethods).WmiSetBrightness(1, 10)'
+                subprocess.run(["powershell", "-Command", ps], capture_output=True)
+                return "亮度已调高"
+
+            if "调小" in text or "减小" in text or "调暗" in text or "变暗" in text:
+                ps = '(Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightnessMethods).WmiSetBrightness(1, -10)'
+                subprocess.run(["powershell", "-Command", ps], capture_output=True)
+                return "亮度已调低"
+
+            # 设置具体亮度
+            m = re.search(r'(\d+)', text)
+            if m:
+                brightness = max(0, min(100, int(m.group(1))))
+                ps = f'(Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightnessMethods).WmiSetBrightness(1, {brightness})'
+                subprocess.run(["powershell", "-Command", ps], capture_output=True)
+                return f"亮度已设置为 {brightness}%"
+
+            return "亮度指令不明确"
+        except:
+            # fallback: 用 Win+A 打开控制中心
+            send_keys("win", "a")
+            return "已打开操作中心，请手动调节亮度"
+
+    def _handle_desktop_ops(self, params: dict, text: str) -> str:
+        """桌面与任务栏操作"""
+        # 回到桌面
+        if "回到桌面" in text:
+            send_keys("win", "d")
+            return "已回到桌面"
+
+        # 打开回收站
+        if "打开回收站" in text or "进入回收站" in text:
+            subprocess.Popen("explorer.exe shell:RecycleBinFolder", shell=True)
+            return "已打开回收站"
+
+        # 清空回收站
+        if "清空回收站" in text:
+            try:
+                subprocess.run(
+                    ["powershell", "-Command",
+                     "Clear-RecycleBin -Force -ErrorAction SilentlyContinue"],
+                    capture_output=True, timeout=10)
+                return "已清空回收站"
+            except:
+                return "清空回收站失败"
+
+        # 整理桌面
+        if "整理桌面" in text or "清理桌面" in text:
+            desktop = Path.home() / "Desktop"
+            try:
+                send_keys("win", "d")
+                time.sleep(0.5)
+                # F5 刷新
+                send_keys("f5")
+                return "桌面已整理"
+            except:
+                return "整理桌面失败"
+
+        # 任务栏操作
+        m = re.search(r"任务栏\s*(.+)", text)
+        if m:
+            action = m.group(1).strip()
+            if "隐藏" in action:
+                send_keys("win", "i")
+                return "已打开设置，可搜索「任务栏」调整"
+            if "小" in action:
+                send_keys("win", "i")
+                return "已打开设置，可搜索「任务栏」调整"
+            return "任务栏操作已处理"
+        return "桌面操作指令不明确"
 
     def _handle_help(self, params: dict, text: str) -> str:
         """帮助"""

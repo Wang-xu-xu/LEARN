@@ -26,8 +26,35 @@ class CommandParser:
         self._register_defaults()
 
     def _register_defaults(self):
-        """注册内置命令"""
+        """注册内置命令（顺序敏感：高优先级在前）"""
         defaults = [
+            # === 高危操作，最高优先级匹配 ===
+            Command(
+                name="system_control",
+                patterns=[
+                    r"关机",
+                    r"重启",
+                    r"锁屏",
+                    r"休眠",
+                    r"注销",
+                ],
+                description="系统控制",
+                examples=["关机", "重启电脑", "锁屏"],
+            ),
+            # === 桌面/回收站特定操作 ===
+            Command(
+                name="desktop_ops",
+                patterns=[
+                    r"(打开|进入)\s*回收站",
+                    r"清空回收站",
+                    r"(整理|清理)\s*桌面",
+                    r"回到桌面",
+                    r"任务栏\s*(.+)",
+                ],
+                description="桌面与任务栏操作",
+                examples=["整理桌面", "打开回收站", "清空回收站"],
+            ),
+            # === 应用操作 ===
             Command(
                 name="open_app",
                 patterns=[
@@ -58,18 +85,6 @@ class CommandParser:
                 ],
                 description="音量控制",
                 examples=["音量调大", "声音调到50", "静音"],
-            ),
-            Command(
-                name="system_control",
-                patterns=[
-                    r"关机",
-                    r"重启",
-                    r"锁屏",
-                    r"休眠",
-                    r"注销",
-                ],
-                description="系统控制",
-                examples=["关机", "重启电脑", "锁屏"],
             ),
             Command(
                 name="web_search",
@@ -120,6 +135,63 @@ class CommandParser:
                 ],
                 description="屏幕截图",
                 examples=["截图"],
+            ),
+            Command(
+                name="window_control",
+                patterns=[
+                    r"(最小化|最大化|还原|恢复)\s*(所有)?(窗口)?",
+                    r"显示桌面",
+                    r"切换窗口",
+                    r"alt\s*tab",
+                    r"任务视图",
+                    r"(置顶|取消置顶)\s*(.+)",
+                    r"(分屏|平铺|堆叠|层叠)(窗口)?",
+                ],
+                description="窗口管理",
+                examples=["最小化所有窗口", "显示桌面", "切换窗口"],
+            ),
+            Command(
+                name="keyboard_input",
+                patterns=[
+                    r"(输入|键入|打出|写入)\s*(.+?)(\s+在|\s+到)?$",
+                    r"(复制|粘贴|剪切|全选|撤销|重做|保存|刷新)",
+                    r"回车",
+                    r"按\s*(下)?\s*(\S+)\s*键",
+                    r"快捷键\s*(.+)",
+                ],
+                description="键盘输入与快捷键",
+                examples=["输入你好", "粘贴", "全选", "按回车键"],
+            ),
+            Command(
+                name="mouse_control",
+                patterns=[
+                    r"(单击|双击|右键)(点击)?\s*$",
+                    r"鼠标\s*(.+)",
+                    r"移动到\s*(.+)",
+                ],
+                description="鼠标控制",
+                examples=["单击", "双击", "右键点击"],
+            ),
+            Command(
+                name="media_control",
+                patterns=[
+                    r"(播放|暂停|停止)\s*(音乐|视频)?",
+                    r"(上一首|下一首|上一条|下一条)",
+                    r"快进",
+                    r"快退",
+                ],
+                description="媒体播放控制",
+                examples=["暂停", "下一首", "播放音乐"],
+            ),
+            Command(
+                name="screen_brightness",
+                patterns=[
+                    r"亮度\s*(.+)",
+                    r"(调亮|调暗|变亮|变暗)",
+                    r"屏幕(亮|暗)",
+                ],
+                description="屏幕亮度调节",
+                examples=["亮度调高", "调亮屏幕"],
             ),
             Command(
                 name="help",
